@@ -28,6 +28,7 @@ import (
 	"github.com/containerd/containerd/content"
 	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/images"
+	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/platforms"
 	digest "github.com/opencontainers/go-digest"
 	ocispecs "github.com/opencontainers/image-spec/specs-go"
@@ -142,6 +143,7 @@ func addNameAnnotation(name string, base map[string]string) map[string]string {
 
 // Export implements Exporter.
 func Export(ctx context.Context, store content.Provider, writer io.Writer, opts ...ExportOpt) error {
+	log.L.Infof("containerd debug: using custom containerd export")
 	var eo exportOptions
 	for _, opt := range opts {
 		if err := opt(ctx, &eo); err != nil {
@@ -153,18 +155,22 @@ func Export(ctx context.Context, store content.Provider, writer io.Writer, opts 
 		ociLayoutFile(""),
 		ociIndexRecord(eo.manifests),
 	}
-
+	log.L.Infof("containerd debug: export options: %+v", eo)
 	algorithms := map[string]struct{}{}
 	dManifests := map[digest.Digest]*exportManifest{}
 	resolvedIndex := map[digest.Digest]digest.Digest{}
+
 	for _, desc := range eo.manifests {
+		log.L.Infof("containerd debug: desc: %+v", desc)
 		switch desc.MediaType {
 		case images.MediaTypeDockerSchema2Manifest, ocispec.MediaTypeImageManifest:
+			log.L.Infof("containerd debug: case A")
 			mt, ok := dManifests[desc.Digest]
 			if !ok {
 				// TODO(containerd): Skip if already added
 				r, err := getRecords(ctx, store, desc, algorithms, &eo.blobRecordOptions)
 				if err != nil {
+					log.L.Infof("containerd debug: get Records failed: %v", err)
 					return err
 				}
 				records = append(records, r...)
@@ -180,25 +186,31 @@ func Export(ctx context.Context, store content.Provider, writer io.Writer, opts 
 				mt.names = append(mt.names, name)
 			}
 		case images.MediaTypeDockerSchema2ManifestList, ocispec.MediaTypeImageIndex:
+			log.L.Infof("containerd debug: case B")
 			d, ok := resolvedIndex[desc.Digest]
 			if !ok {
 				if err := desc.Digest.Validate(); err != nil {
 					return err
 				}
+				log.L.Infof("containerd debug: appending record")
 				records = append(records, blobRecord(store, desc, &eo.blobRecordOptions))
 
+				log.L.Infof("containerd debug: reading blob")
 				p, err := content.ReadBlob(ctx, store, desc)
 				if err != nil {
 					return err
 				}
 
+				log.L.Infof("containerd debug: unmarshalling")
 				var index ocispec.Index
 				if err := json.Unmarshal(p, &index); err != nil {
 					return err
 				}
 
 				var manifests []ocispec.Descriptor
+				log.L.Infof("containerd debug: eo.platform: %v", eo.platform)
 				for _, m := range index.Manifests {
+					log.L.Infof("containerd debug: m.Platform: %+v", m.Platform)
 					if eo.platform != nil {
 						if m.Platform == nil || eo.platform.Match(*m.Platform) {
 							manifests = append(manifests, m)
@@ -207,6 +219,7 @@ func Export(ctx context.Context, store content.Provider, writer io.Writer, opts 
 						}
 					}
 
+					log.L.Infof("containerd debug: get record m: %+v", m)
 					r, err := getRecords(ctx, store, m, algorithms, &eo.blobRecordOptions)
 					if err != nil {
 						return err
